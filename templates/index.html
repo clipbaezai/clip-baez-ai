@@ -55,10 +55,7 @@ button{font-size:13px}button.primary{padding:14px 18px;border-radius:11px;font-w
  <div class="hero"><p class="eyebrow">GENERADOR DE VIDEOS</p><h1>YouTube <span>Clips</span></h1><p class="intro">Pega el enlace del video y elige la duración de tus clips.</p></div>
  <div class="panel">
   <label for="url">ENLACE DE YOUTUBE</label><input id="url" type="url" placeholder="https://www.youtube.com/watch?v=..." autocomplete="url">
-  <label for="videoFile">O SUBE UN VIDEO DESDE TU DISPOSITIVO</label>
-<input id="videoFile" type="file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska">
-<button id="uploadStart" class="primary" onclick="startUpload()">SUBIR Y GENERAR CLIPS</button>
-<div id="uploadStatus" class="status" aria-live="polite">Selecciona un video.</div>
+ 
   <div class="settings"><div><label for="seconds">DURACIÓN DE CADA CLIP</label><select id="seconds"><option value="15">15 segundos</option><option value="30" selected>30 segundos</option><option value="45">45 segundos</option><option value="60">60 segundos</option><option value="90">90 segundos</option></select></div>
   <div><label for="max">MÁXIMO DE CLIPS</label><select id="max"><option>5</option><option>10</option><option selected>18</option></select></div></div>
   <button id="start" class="primary" onclick="startJob()">✦ GENERAR CLIPS</button><div id="status" class="status" aria-live="polite">Listo para comenzar.</div>
@@ -126,34 +123,7 @@ async function pollJob(id, statusId='status', buttonId='start'){
  }
 }
 async function startLive(){
- async function startUpload(){
- const file=document.getElementById('videoFile').files[0];
- const status=document.getElementById('uploadStatus');
- const button=document.getElementById('uploadStart');
 
- if(!file){
-  status.textContent='Selecciona un video primero.';
-  return;
- }
-
- button.disabled=true;
- status.textContent='Subiendo video...';
-
- const form=new FormData();
- form.append('file',file);
- form.append('clip_seconds',document.getElementById('seconds').value);
- form.append('max_clips',document.getElementById('max').value);
-
- try{
-  const r=await fetch('/api/upload',{method:'POST',body:form});
-  const d=await r.json();
-  if(!r.ok)throw new Error(d.detail||'No se pudo subir el video.');
-  pollJob(d.job_id,'uploadStatus','uploadStart');
- }catch(e){
-  status.textContent='Error: '+e.message;
-  button.disabled=false;
- }
-}
  const url=document.getElementById('liveUrl').value.trim(), status=document.getElementById('liveStatus');
  if(!url){status.textContent='Pega primero el enlace de YouTube LIVE.';return;}
  document.getElementById('liveStart').disabled=true;status.textContent='Conectando con YouTube LIVE...';
