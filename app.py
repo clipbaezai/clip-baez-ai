@@ -6,7 +6,8 @@ import subprocess
 import json
 import re
 
-from fastapi import FastAPI, BackgroundTasks, HTTPException
+from fastapi import FastAPI, BackgroundTasks, HTTPException, UploadFile, File, Form
+import shutil
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -107,10 +108,99 @@ def run_job(job_id, request_data):
     except Exception as exc:
         set_job(job_id, status="error", message=str(exc), clips=[])
 
+def run_uploaded_job(job_id, video_path, clip_seconds, max_clips):
+    try:
+        set_job(job_id, status="processing", message="Preparando clips verticales…")
+        video_path = Path(video_path)
+
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
+            capture_output=True, text=True, check=True
+        )
+        duration = float(probe.stdout.strip())
+        count = min(max_clips, max(1, int((duration + clip_seconds - 1) // clip_seconds)))
+        made = []
+
+        for index in range(count):
+            start = index * clip_seconds
+            length = min(clip_seconds, duration - start)
+            if length <= 0:
+                break
+
+            out = CLIPS / f"{job_id}_clip_{index+1:02d}.mp4"
+            subprocess.run([
+                "ffmpeg", "-y", "-ss", str(start), "-i", str(video_path),
+                "-t", str(length),
+                "-vf", "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920",
+                "-c:v", "libx264", "-c:a", "aac", "-pix_fmt", "yuv420p",
+                "-preset", "veryfast", "-movflags", "+faststart", str(out)
+            ], capture_output=True, text=True, check=True)
+
+            made.append({
+                "name": out.name,
+                "url": f"/media/clips/{out.name}",
+                "number": index + 1,
+                "seconds": round(length, 1),
+            })
+
+        set_job(job_id, status="completed", message=f"Listo: {len(made)} clips creados.", clips=made)
+
+    except Exception as exc:
+        set_job(job_id, status="error", message=str(exc), clips=[])
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
     return templates.TemplateResponse(request=request, name="index.html", context={"request": request})
 
+@app.post("/api/upload")
+async def upload_video(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    clip_seconds: int = Form(30),
+    max_clips: int = Form(18)
+):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Selecciona un video.")
+
+    extension = Path(file.filename).suffix.lower()
+    if extension not in {".mp4", ".mov", ".mkv", ".webm"}:
+        raise HTTPException(status_code=400, detail="Formato no permitido.")
+
+    if clip_seconds not in {15, 30, 45, 60, 90} or max_clips not in {5, 10, 18}:
+        raise HTTPException(status_code=400, detail="Configuración inválida.")
+
+    job_id = uuid4().hex[:12]
+    video_path = UPLOADS / f"{job_id}{extension}"
+    size = 0
+
+    try:
+        with video_path.open("wb") as output:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > 200 * 1024 * 1024:
+                    raise HTTPException(status_code=413, detail="El video supera el límite de 200 MB.")
+                output.write(chunk)
+    except Exception:
+        video_path.unlink(missing_ok=True)
+        raise
+    finally:
+        await file.close()
+
+    with jobs_lock:
+        jobs[job_id] = {
+            "id": job_id,
+            "status": "queued",
+            "message": "Video recibido. Preparando clips…",
+            "clips": []
+        }
+
+    background_tasks.add_task(
+        run_uploaded_job, job_id, str(video_path), clip_seconds, max_clips
+    )
+    return {"job_id": job_id}
 @app.post("/api/jobs")
 def create_job(payload: ClipRequest, background_tasks: BackgroundTasks):
     if not valid_youtube_url(payload.url):
